@@ -1,0 +1,32 @@
+name: vijil-docs-agent
+
+services:
+  agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: vijil-docs-agent
+    environment:
+      - REDPILL_API_KEY=${REDPILL_API_KEY}
+      - REDPILL_BASE_URL=${REDPILL_BASE_URL}
+      - CHAT_MODEL=${CHAT_MODEL}
+      - RAG_TEMP=${RAG_TEMP:-0.2}
+      - RAG_DATA_DIR=${RAG_DATA_DIR:-data/docs}
+      - RAG_INDEX_DIR=${RAG_INDEX_DIR:-data/faiss_index}
+      - RAG_CHUNK_SIZE=${RAG_CHUNK_SIZE:-1200}
+      - RAG_CHUNK_OVERLAP=${RAG_CHUNK_OVERLAP:-200}
+      - RAG_TOP_K=${RAG_TOP_K:-5}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBED_MODEL=${EMBED_MODEL:-text-embedding-3-small}
+    ports:
+      - "8000:8000"
+    env_file: ".env"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    stop_grace_period: 10s
+
