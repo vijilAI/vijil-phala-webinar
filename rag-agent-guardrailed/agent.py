@@ -98,7 +98,11 @@ def _initialize_dome():
     return dome
 
 def _chat_llm():
-    """Prefer Redpill if both vars are set; otherwise use OpenAI."""
+    """Prefer Redpill if both vars are set; otherwise use OpenAI.
+    
+    Note: ChatOpenAI supports both sync and async operations.
+    When used in LangGraph with async tools, it automatically uses async methods (ainvoke).
+    """
     debug_handler = DebugCallbackHandler()
     
     if REDPILL_API_KEY and REDPILL_BASE_URL:

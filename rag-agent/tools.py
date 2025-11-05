@@ -1,6 +1,5 @@
 import os
 import time
-from functools import lru_cache
 from langchain_core.tools import tool
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -56,13 +55,15 @@ def _build_or_load_retriever():
 
 _retriever = _build_or_load_retriever()
 
-# Cache for recent queries (stores last 128 queries - increased for better hit rate)
-@lru_cache(maxsize=128)
-def _cached_retrieval(query: str) -> str:
-    """Cached retrieval to avoid redundant lookups."""
+@tool
+async def lookup_docs(query: str) -> str:
+    """Search local Markdown (data/**/*.md) and return top snippets with sources."""
     start_time = time.time()
     print(f"🔍 Searching for: '{query[:50]}...'")
-    docs = _retriever.invoke(query)
+    
+    # Use async ainvoke method for non-blocking retrieval
+    docs = await _retriever.ainvoke(query)
+    
     elapsed = time.time() - start_time
     print(f"⏱️  Retrieval took {elapsed:.2f}s (embedding + FAISS search)")
     
@@ -71,8 +72,3 @@ def _cached_retrieval(query: str) -> str:
                                for d in docs)
     print(f"⏱️  Returning {len(result)} chars from {len(docs)} docs")
     return result
-
-@tool
-def lookup_docs(query: str) -> str:
-    """Search local Markdown (data/**/*.md) and return top snippets with sources."""
-    return _cached_retrieval(query)
