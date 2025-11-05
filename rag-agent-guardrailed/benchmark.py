@@ -13,7 +13,6 @@ import json
 
 # Configuration
 BASE_URL = "http://localhost:8000/v1/chat/completions"
-# BASE_URL = "https://85a847ca55337a9027743abd6e6346593ab15bb5-8000.dstack-pha-prod7.phala.network/v1/chat/completions"
 MODEL = "vijil-docs-agent"
 
 # Test queries (mix of similar and different queries to test caching)

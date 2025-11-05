@@ -72,18 +72,24 @@ def _initialize_dome():
         logger.info("Using default Dome guardrail configuration")
         # Default configuration with security and moderation guards
         guardrail_config = {
-            "input-guards": [{
-                "security-scanner": {
-                    "type": "security",
-                    "methods": ['prompt-injection-deberta-v3-base'],
-                }
-            }],
-            "output-guards": [{
-                "content-filter": {
-                    "type": "moderation",
-                    "methods": ['moderation-flashtext'],
-                }
-            }],
+            'input-guards': ['security-input-guard', 'moderation-input-guard'],
+            'output-guards': ['moderation-output-guard'],
+            'input-early-exit': True,
+            'security-input-guard': {
+                'type': 'security',
+                'early-exit': True,
+                'methods': ['prompt-injection-mbert']
+            },
+            'moderation-input-guard': {
+                'type': 'moderation',
+                'early-exit': True,
+                'methods': ['moderation-flashtext']
+            },
+            'moderation-output-guard': {
+                'type': 'moderation',
+                'early-exit': True,
+                'methods': ['moderation-deberta', 'moderation-flashtext']
+            }
         }
     
     # Initialize Dome
