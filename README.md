@@ -16,7 +16,7 @@ The complete workflow shows how to move from an unguarded agent to a production-
 | **Embeddings** | OpenAI `text-embedding-3-small` | RAG document retrieval |
 | **Base Agent** | `rag-agent/` | For evaluation (no guardrails) |
 | **Base Agent (Docker)** | `public.ecr.aws/h6q2v0i0/vijil-docs-agent:0.0.18` | Pre-built image for deployment |
-| **Production Agent** | `rag-agent-guardrailed/` | With recommended guardrails |
+| **Production Agent** | `rag-agent-guardrailed/` | With recommended guardrails (uses CPU-only PyTorch) |
 | **Production Agent (Docker)** | `public.ecr.aws/h6q2v0i0/vijil-docs-agent-guardrailed:0.0.10` | Pre-built image for deployment |
 | **Evaluation** | `evaluate-connection.ipynb` | Run tests, get recommendations |
 
@@ -184,6 +184,29 @@ cp ../rag-agent/.env .
 uvicorn agent:app --host 0.0.0.0 --port 8000
 ```
 
+**💡 CPU-Only PyTorch Setup:**
+
+For local development, install CPU-only PyTorch (~100-200MB) **before** installing requirements to avoid downloading CUDA PyTorch (~2-3GB):
+
+```bash
+cd rag-agent-guardrailed
+
+# Install CPU-only PyTorch first
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+# Then install remaining dependencies
+pip install -r requirements.txt
+
+# Run the agent
+uvicorn agent:app --host 0.0.0.0 --port 8000
+```
+
+**Why this order?** Installing `torch` first ensures `vijil-dome` uses the existing CPU-only version instead of trying to install CUDA PyTorch.
+
+> 🐳 **Docker users:** The Dockerfile already handles this automatically - no manual steps needed!
+
+**Performance:** All guardrails remain fully functional on CPU. Model inference will be 2-5x slower than GPU, but for most guardrailing use cases, CPU performance is acceptable.
+
 ### 3. Test the Agent
 
 ```bash
@@ -308,6 +331,8 @@ docker compose up -d
 
 Both will be available at `http://localhost:8000/v1/chat/completions`
 
+> 💡 **CPU-Only PyTorch:** The guardrailed agent's Dockerfile installs CPU-only PyTorch first (before other dependencies), preventing CUDA installation and reducing the Docker image size by ~2GB.
+
 ### Docker Image Details
 
 The images include:
@@ -317,6 +342,9 @@ The images include:
 - ✅ Health check endpoint (`/v1/health`)
 - ✅ OpenAI-compatible API (`/v1/chat/completions`)
 - ✅ Guardrails configured (guardrailed image only)
+- ✅ **CPU-only PyTorch** (~100-200MB vs ~2-3GB with CUDA) - installed first in Dockerfile
+
+> 📦 **Efficient Build:** The Dockerfile installs CPU-only PyTorch **before** installing dependencies, so `vijil-dome` uses it instead of downloading CUDA PyTorch. No double installation!
 
 **Environment Variables Supported:**
 
