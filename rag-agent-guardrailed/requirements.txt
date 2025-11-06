@@ -9,3 +9,8 @@ langgraph-openai-serve
 python-dotenv
 aiohttp
 vijil-dome
+
+# Note: For Docker builds, torch (CPU-only) is installed first in the Dockerfile
+# For local development, install torch first:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements.txt

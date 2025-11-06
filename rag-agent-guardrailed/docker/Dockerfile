@@ -3,7 +3,12 @@ FROM python:3.11 AS builder
 
 WORKDIR /app
 
-# Copy requirements and install with caching
+# Install CPU-only PyTorch FIRST to avoid CUDA installation
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --user --no-warn-script-location \
+    torch --index-url https://download.pytorch.org/whl/cpu
+
+# Copy requirements and install remaining dependencies
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --user --no-warn-script-location -r requirements.txt
