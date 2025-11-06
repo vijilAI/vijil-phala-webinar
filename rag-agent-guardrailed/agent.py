@@ -1,7 +1,6 @@
 import os
 import time
 import logging
-import json
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -27,12 +26,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- Env (only here) ---
-OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY")            # used if not using Redpill
-REDPILL_API_KEY  = os.getenv("REDPILL_API_KEY")           # optional: use Redpill for chat if set
-REDPILL_BASE_URL = os.getenv("REDPILL_BASE_URL")          # e.g. https://api.redpill.ai/v1
+OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY")            # used if not using Groq, also for embeddings
+GROQ_API_KEY  = os.getenv("GROQ_API_KEY")           # optional: use Groq for chat if set
+GROQ_BASE_URL = os.getenv("GROQ_BASE_URL")          # e.g. https://api.groq.com/openai/v1
 CHAT_MODEL       = os.getenv("CHAT_MODEL", "gpt-4o-mini")
 TEMP             = float(os.getenv("RAG_TEMP", "0.2"))
-DOME_CONFIG_PATH = os.getenv("DOME_CONFIG_PATH")          # optional: path to Dome guardrail config JSON
 
 # RAG tool
 from tools import lookup_docs
@@ -64,33 +62,32 @@ class DebugCallbackHandler(BaseCallbackHandler):
 
 def _initialize_dome():
     """Initialize Dome guardrails from config file or use defaults."""
-    if DOME_CONFIG_PATH and os.path.exists(DOME_CONFIG_PATH):
-        logger.info(f"Loading Dome config from: {DOME_CONFIG_PATH}")
-        with open(DOME_CONFIG_PATH, 'r') as f:
-            guardrail_config = json.load(f)
-    else:
-        logger.info("Using default Dome guardrail configuration")
-        # Default configuration with security and moderation guards
-        guardrail_config = {
-            'input-guards': ['security-input-guard', 'moderation-input-guard'],
-            'output-guards': ['moderation-output-guard'],
-            'input-early-exit': True,
-            'security-input-guard': {
-                'type': 'security',
-                'early-exit': True,
-                'methods': ['prompt-injection-mbert']
-            },
-            'moderation-input-guard': {
-                'type': 'moderation',
-                'early-exit': True,
-                'methods': ['moderation-flashtext']
-            },
-            'moderation-output-guard': {
-                'type': 'moderation',
-                'early-exit': True,
-                'methods': ['moderation-deberta', 'moderation-flashtext']
-            }
+    logger.info("Using default Dome guardrail configuration")
+    # Default configuration with security and moderation guards
+    guardrail_config = {
+        'input-guards': ['security-input-guard', 'moderation-input-guard', 'privacy-input-guard'],
+        'output-guards': ['moderation-output-guard'],
+        'input-early-exit': True,
+        'security-input-guard': {
+            'type': 'security',
+            'early-exit': True,
+            'methods': ['prompt-injection-mbert']
+        },
+        'moderation-input-guard': {
+            'type': 'moderation',
+            'early-exit': True,
+            'methods': ['moderation-flashtext']
+        },
+        'moderation-output-guard': {
+            'type': 'moderation',
+            'early-exit': True,
+            'methods': ['moderation-deberta', 'moderation-flashtext']
+        },
+        'privacy-input-guard': {
+            'type': 'privacy',
+            'methods': ['privacy-presidio']
         }
+    }
     
     # Initialize Dome
     dome = Dome(guardrail_config)
@@ -98,48 +95,47 @@ def _initialize_dome():
     return dome
 
 def _chat_llm():
-    """Prefer Redpill if both vars are set; otherwise use OpenAI.
-    
-    Note: ChatOpenAI supports both sync and async operations.
-    When used in LangGraph with async tools, it automatically uses async methods (ainvoke).
-    """
+    """Prefer Groq if both vars are set; otherwise use OpenAI."""
     debug_handler = DebugCallbackHandler()
     
-    if REDPILL_API_KEY and REDPILL_BASE_URL:
-        logger.info(f"Using Redpill with model {CHAT_MODEL} at {REDPILL_BASE_URL}")
+    if GROQ_API_KEY and GROQ_BASE_URL:
+        logger.info(f"Using Groq with model {CHAT_MODEL} at {GROQ_BASE_URL}")
         return ChatOpenAI(
             model=CHAT_MODEL,
-            api_key=REDPILL_API_KEY,
-            base_url=REDPILL_BASE_URL,
+            api_key=GROQ_API_KEY,
+            base_url=GROQ_BASE_URL,
             temperature=TEMP,
-            max_tokens=300,  # Limit response length for faster generation
-            timeout=30,  # 30 second timeout
+            max_tokens=2000,              # Increased - tool calls need overhead
+            max_completion_tokens=3000,   # For reasoning models
+            max_retries=2,
+            timeout=100,
             verbose=True,
             callbacks=[debug_handler]
         ).bind_tools([lookup_docs])
     else:
         logger.info(f"Using OpenAI with model: {CHAT_MODEL}")
-        assert OPENAI_API_KEY, "OPENAI_API_KEY is required if not using Redpill."
+        assert OPENAI_API_KEY, "OPENAI_API_KEY is required if not using Groq."
         return ChatOpenAI(
             model=CHAT_MODEL,
             api_key=OPENAI_API_KEY,
             temperature=TEMP,
-            max_tokens=300,  # Limit response length for faster generation
-            timeout=30,  # 30 second timeout
+            max_tokens=2000,              # Increased - tool calls need overhead
+            max_completion_tokens=3000,   # For reasoning models
+            max_retries=2,
+            timeout=100,
             verbose=True,
             callbacks=[debug_handler]
         ).bind_tools([lookup_docs])
 
 SYS_PROMPT = (
-    "You are a Vijil documentation expert assistant. Your role is to provide accurate, "
-    "concise answers based on the Vijil documentation.\n\n"
+    "You are a Vijil documentation expert assistant and general chatbot. Your role is to provide helpful "
+    "answers about the Vijil documentation and general topics.\n\n"
     "INSTRUCTIONS:\n"
-    "1. Use the `lookup_docs` tool ONCE to search the documentation, then answer based on those results.\n"
-    "2. DO NOT call lookup_docs multiple times for the same question.\n"
-    "3. Base your answers strictly on the retrieved documentation snippets.\n"
-    "4. When citing information, reference the source file when relevant.\n"
-    "5. If the documentation doesn't contain the answer, acknowledge this clearly and briefly.\n"
-    "6. Keep responses concise and technically accurate (2-3 sentences max when possible).\n"
+    "1. Use the `lookup_docs` tool to search the documentation.\n"
+    "2. After using the tool, ALWAYS provide a text response summarizing what you found.\n"
+    "3. CRITICAL: You MUST end with a text message to the user. Tool calls alone are not sufficient.\n"
+    "4. If the tool returns no results: Say you couldn't find information and suggest alternatives.\n"
+    "5. Keep responses concise but informative.\n"
 )
 
 # Build ReAct agent (this returns a compiled LangGraph)
@@ -226,14 +222,12 @@ app = FastAPI(title="Vijil Docs Agent")
 logger.info("=" * 60)
 logger.info("🚀 Vijil Docs Agent Starting")
 logger.info("=" * 60)
-logger.info(f"   Backend: {'Redpill' if REDPILL_API_KEY and REDPILL_BASE_URL else 'OpenAI'}")
-if REDPILL_API_KEY and REDPILL_BASE_URL:
-    logger.info(f"   Redpill URL: {REDPILL_BASE_URL}")
+logger.info(f"   Backend: {'Groq' if GROQ_API_KEY and GROQ_BASE_URL else 'OpenAI'}")
+if GROQ_API_KEY and GROQ_BASE_URL:
+    logger.info(f"   Groq URL: {GROQ_BASE_URL}")
 logger.info(f"   Model: {CHAT_MODEL}")
 logger.info(f"   Temperature: {TEMP}")
-logger.info(f"   Guardrails: {'Custom Config' if DOME_CONFIG_PATH else 'Default Config'}")
-if DOME_CONFIG_PATH:
-    logger.info(f"   Config Path: {DOME_CONFIG_PATH}")
+logger.info(f"   Guardrails: {dome.get_guardrails() if dome else 'None'}")
 logger.info("=" * 60)
 
 # Add timing and error logging middleware
@@ -257,10 +251,9 @@ async def add_timing_and_error_logging(request: Request, call_next):
 registry = GraphRegistry(
     registry={
         # Clients will pass model="vijil-docs-agent" when calling /v1/chat/completions
-        # The guarded_agent_graph wraps the react agent with Dome guardrails
         "vijil-docs-agent": GraphConfig(
-            graph=guarded_agent_graph,
-            streamable_node_names=["react"]  # Our wrapper has a single "react" node
+            graph=guarded_agent_graph,  # Use the guarded wrapper with Dome
+            streamable_node_names=["react"]  # Changed from ["agent", "tools"] to match wrapper node name
         )
     }
 )

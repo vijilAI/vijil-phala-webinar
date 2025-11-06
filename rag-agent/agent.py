@@ -18,9 +18,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- Env (only here) ---
-OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY")            # used if not using Redpill
-REDPILL_API_KEY  = os.getenv("REDPILL_API_KEY")           # optional: use Redpill for chat if set
-REDPILL_BASE_URL = os.getenv("REDPILL_BASE_URL")          # e.g. https://api.redpill.ai/v1
+OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY")            # used if not using Groq, also for embeddings
+GROQ_API_KEY  = os.getenv("GROQ_API_KEY")           # optional: use Groq for chat if set
+GROQ_BASE_URL = os.getenv("GROQ_BASE_URL")          # e.g. https://api.groq.com/v1
 CHAT_MODEL       = os.getenv("CHAT_MODEL", "gpt-4o-mini")
 TEMP             = float(os.getenv("RAG_TEMP", "0.2"))
 
@@ -39,8 +39,69 @@ class DebugCallbackHandler(BaseCallbackHandler):
             logger.debug(f"   Kwargs: {kwargs}")
     
     def on_llm_end(self, response: LLMResult, **kwargs):
-        """Log when LLM ends successfully."""
+        """Log when LLM ends successfully and check for issues."""
         logger.info(f"✅ LLM End - Generations: {len(response.generations)}")
+        
+        # Check for empty responses and truncation
+        has_content = False
+        has_tool_calls = False
+        has_invalid_tool_calls = False
+        
+        for gen_list in response.generations:
+            for gen in gen_list:
+                # Check for truncation
+                if hasattr(gen, 'generation_info') and gen.generation_info:
+                    finish_reason = gen.generation_info.get('finish_reason')
+                    if finish_reason == 'length':
+                        logger.warning("⚠️  Response truncated - consider increasing max_tokens")
+                
+                # Check if response has text content
+                if hasattr(gen, 'text') and gen.text.strip():
+                    has_content = True
+                elif hasattr(gen, 'message'):
+                    if gen.message.content and str(gen.message.content).strip():
+                        has_content = True
+                    
+                    # Check for valid tool calls
+                    if hasattr(gen.message, 'tool_calls') and gen.message.tool_calls:
+                        has_tool_calls = True
+                        logger.info(f"✅ Valid tool call: {gen.message.tool_calls[0].get('name')} with {len(str(gen.message.tool_calls[0]))} chars")
+                    elif hasattr(gen.message, 'additional_kwargs'):
+                        if gen.message.additional_kwargs.get('tool_calls'):
+                            has_tool_calls = True
+                            logger.info(f"✅ Valid tool call in additional_kwargs")
+                    
+                    # Check for invalid tool calls
+                    if hasattr(gen.message, 'invalid_tool_calls') and gen.message.invalid_tool_calls:
+                        has_invalid_tool_calls = True
+                        invalid = gen.message.invalid_tool_calls[0]
+                        logger.error(f"⚠️  INVALID TOOL CALL:")
+                        logger.error(f"   Tool: {invalid.get('name')}")
+                        logger.error(f"   Args (truncated?): {invalid.get('args')}")
+                        logger.error(f"   Error: {invalid.get('error')}")
+                        logger.error(f"   Completion tokens: {response.llm_output.get('token_usage', {}).get('completion_tokens', 'unknown')}")
+                        logger.error(f"   This suggests the response was cut off mid-generation!")
+        
+        # Only error if there's no content AND no tool calls (valid or invalid)
+        if not has_content and not has_tool_calls and not has_invalid_tool_calls:
+            # Detailed debugging for empty responses
+            for gen_list in response.generations:
+                for gen in gen_list:
+                    if hasattr(gen, 'message'):
+                        logger.error("❌ EMPTY RESPONSE DEBUG:")
+                        logger.error(f"   Content: '{gen.message.content}'")
+                        logger.error(f"   Content type: {type(gen.message.content)}")
+                        logger.error(f"   Additional kwargs: {gen.message.additional_kwargs}")
+                        logger.error(f"   Tool calls attr exists: {hasattr(gen.message, 'tool_calls')}")
+                        if hasattr(gen.message, 'tool_calls'):
+                            logger.error(f"   Tool calls value: {gen.message.tool_calls}")
+                        logger.error(f"   Invalid tool calls attr exists: {hasattr(gen.message, 'invalid_tool_calls')}")
+                        if hasattr(gen.message, 'invalid_tool_calls'):
+                            logger.error(f"   Invalid tool calls value: {gen.message.invalid_tool_calls}")
+                        logger.error(f"   Response metadata: {gen.message.response_metadata}")
+            logger.error(f"   Token usage: {response.llm_output.get('token_usage')}")
+        elif (has_tool_calls or has_invalid_tool_calls) and not has_content:
+            logger.debug(f"🔧 LLM made tool calls (content empty is expected)")
         
     def on_llm_error(self, error: Exception, **kwargs):
         """Log when LLM encounters an error."""
@@ -53,44 +114,47 @@ class DebugCallbackHandler(BaseCallbackHandler):
             logger.error(f"   Additional context: {kwargs}")
 
 def _chat_llm():
-    """Prefer Redpill if both vars are set; otherwise use OpenAI."""
+    """Prefer Groq if both vars are set; otherwise use OpenAI."""
     debug_handler = DebugCallbackHandler()
     
-    if REDPILL_API_KEY and REDPILL_BASE_URL:
-        logger.info(f"Using Redpill with model {CHAT_MODEL} at {REDPILL_BASE_URL}")
+    if GROQ_API_KEY and GROQ_BASE_URL:
+        logger.info(f"Using Groq with model {CHAT_MODEL} at {GROQ_BASE_URL}")
         return ChatOpenAI(
             model=CHAT_MODEL,
-            api_key=REDPILL_API_KEY,
-            base_url=REDPILL_BASE_URL,
+            api_key=GROQ_API_KEY,
+            base_url=GROQ_BASE_URL,
             temperature=TEMP,
-            max_tokens=300,  # Limit response length for faster generation
-            timeout=30,  # 30 second timeout
+            max_tokens=2000,              # Increased - tool calls need overhead
+            max_completion_tokens=3000,   # For reasoning models
+            max_retries=2,
+            timeout=100,
             verbose=True,
             callbacks=[debug_handler]
         ).bind_tools([lookup_docs])
     else:
         logger.info(f"Using OpenAI with model: {CHAT_MODEL}")
-        assert OPENAI_API_KEY, "OPENAI_API_KEY is required if not using Redpill."
+        assert OPENAI_API_KEY, "OPENAI_API_KEY is required if not using Groq."
         return ChatOpenAI(
             model=CHAT_MODEL,
             api_key=OPENAI_API_KEY,
             temperature=TEMP,
-            max_tokens=300,  # Limit response length for faster generation
-            timeout=30,  # 30 second timeout
+            max_tokens=2000,              # Increased - tool calls need overhead
+            max_completion_tokens=3000,   # For reasoning models
+            max_retries=2,
+            timeout=100,
             verbose=True,
             callbacks=[debug_handler]
         ).bind_tools([lookup_docs])
 
 SYS_PROMPT = (
-    "You are a Vijil documentation expert assistant. Your role is to provide accurate, "
-    "concise answers based on the Vijil documentation.\n\n"
+    "You are a Vijil documentation expert assistant and general chatbot. Your role is to provide helpful "
+    "answers about the Vijil documentation and general topics.\n\n"
     "INSTRUCTIONS:\n"
-    "1. Use the `lookup_docs` tool ONCE to search the documentation, then answer based on those results.\n"
-    "2. DO NOT call lookup_docs multiple times for the same question.\n"
-    "3. Base your answers strictly on the retrieved documentation snippets.\n"
-    "4. When citing information, reference the source file when relevant.\n"
-    "5. If the documentation doesn't contain the answer, acknowledge this clearly and briefly.\n"
-    "6. Keep responses concise and technically accurate (2-3 sentences max when possible).\n"
+    "1. Use the `lookup_docs` tool to search the documentation.\n"
+    "2. After using the tool, ALWAYS provide a text response summarizing what you found.\n"
+    "3. CRITICAL: You MUST end with a text message to the user. Tool calls alone are not sufficient.\n"
+    "4. If the tool returns no results: Say you couldn't find information and suggest alternatives.\n"
+    "5. Keep responses concise but informative.\n"
 )
 
 # Build ReAct agent (this returns a compiled LangGraph)
@@ -107,9 +171,9 @@ app = FastAPI(title="Vijil Docs Agent")
 logger.info("=" * 60)
 logger.info("🚀 Vijil Docs Agent Starting")
 logger.info("=" * 60)
-logger.info(f"   Backend: {'Redpill' if REDPILL_API_KEY and REDPILL_BASE_URL else 'OpenAI'}")
-if REDPILL_API_KEY and REDPILL_BASE_URL:
-    logger.info(f"   Redpill URL: {REDPILL_BASE_URL}")
+logger.info(f"   Backend: {'Groq' if GROQ_API_KEY and GROQ_BASE_URL else 'OpenAI'}")
+if GROQ_API_KEY and GROQ_BASE_URL:
+    logger.info(f"   Groq URL: {GROQ_BASE_URL}")
 logger.info(f"   Model: {CHAT_MODEL}")
 logger.info(f"   Temperature: {TEMP}")
 logger.info("=" * 60)

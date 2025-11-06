@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Benchmark script for Vijil Docs Agent
-Tests response times, rate limits, and cache effectiveness
+Tests response times at different RPM (requests per minute) rates
 """
 import asyncio
 import aiohttp
@@ -13,22 +13,30 @@ import json
 
 # Configuration
 BASE_URL = "http://localhost:8000/v1/chat/completions"
-# BASE_URL = "https://85a847ca55337a9027743abd6e6346593ab15bb5-8000.dstack-pha-prod7.phala.network/v1/chat/completions"
+# BASE_URL = "https://22b30e8e1b01d732e7dae67d7b0c2dfd67dfeb53-8000.dstack-pha-prod7.phala.network/v1/chat/completions"
 MODEL = "vijil-docs-agent"
 
-# Test queries (mix of similar and different queries to test caching)
+# Test queries (includes duplicates to test for any caching/optimization benefits)
 TEST_QUERIES = [
     "What is Vijil?",
-    "What is Vijil?",  # Duplicate to test cache
     "How do I use Vijil for evaluation?",
     "What are Vijil's main features?",
-    "What is Vijil?",  # Another duplicate
+    "What is Vijil?",  # Duplicate to test if repeated queries are faster
     "Explain Vijil detectors",
     "How does Vijil evaluate LLMs?",
     "What trust dimensions does Vijil support?",
-    "What is Vijil?",  # Test cache again
+    "What is Vijil?",  # Another duplicate
     "How do I get started with Vijil?",
+    "What is the Vijil SDK?",
+    "How do I install Vijil?",
+    "What models does Vijil support?",
+    "How do I use Vijil for evaluation?",  # Duplicate
+    "What are Vijil's main features?",  # Duplicate
 ]
+
+# RPM test configurations
+RPM_TESTS = [10, 20, 50]  # Requests per minute to test
+REQUESTS_PER_TEST = 30  # Number of requests to send per RPM test
 
 @dataclass
 class RequestResult:
@@ -38,10 +46,13 @@ class RequestResult:
     error: str = None
     cached: bool = False
     response_length: int = 0
+    request_start_time: float = 0  # When the request was initiated
 
-async def make_request(session: aiohttp.ClientSession, query: str) -> RequestResult:
+async def make_request(session: aiohttp.ClientSession, query: str, request_start_time: float = None) -> RequestResult:
     """Make a single chat completion request."""
     start_time = time.time()
+    if request_start_time is None:
+        request_start_time = start_time
     
     payload = {
         "model": MODEL,
@@ -61,7 +72,8 @@ async def make_request(session: aiohttp.ClientSession, query: str) -> RequestRes
                     query=query,
                     response_time=elapsed,
                     success=True,
-                    response_length=len(content)
+                    response_length=len(content),
+                    request_start_time=request_start_time
                 )
             else:
                 error_text = await response.text()
@@ -69,7 +81,8 @@ async def make_request(session: aiohttp.ClientSession, query: str) -> RequestRes
                     query=query,
                     response_time=elapsed,
                     success=False,
-                    error=f"HTTP {response.status}: {error_text[:100]}"
+                    error=f"HTTP {response.status}: {error_text[:100]}",
+                    request_start_time=request_start_time
                 )
     except Exception as e:
         elapsed = time.time() - start_time
@@ -77,60 +90,68 @@ async def make_request(session: aiohttp.ClientSession, query: str) -> RequestRes
             query=query,
             response_time=elapsed,
             success=False,
-            error=str(e)
+            error=str(e),
+            request_start_time=request_start_time
         )
 
-async def run_sequential_test(queries: List[str]) -> List[RequestResult]:
-    """Run requests sequentially (one at a time)."""
-    print("\n" + "="*60)
-    print("SEQUENTIAL TEST (1 request at a time)")
+async def run_rpm_test(rpm: int, num_requests: int, queries: List[str]) -> List[RequestResult]:
+    """Run requests at a specific RPM (requests per minute) rate.
+    
+    Args:
+        rpm: Target requests per minute
+        num_requests: Total number of requests to make
+        queries: List of query strings to cycle through
+    """
+    print(f"\n" + "="*60)
+    print(f"RPM TEST: {rpm} requests/minute")
     print("="*60)
+    print(f"Target: {num_requests} total requests")
+    print(f"Expected duration: {num_requests / rpm:.1f} minutes ({num_requests * 60 / rpm:.0f} seconds)")
+    
+    # Calculate delay between requests to achieve target RPM
+    delay_between_requests = 60.0 / rpm
+    print(f"Delay between requests: {delay_between_requests:.2f}s")
     
     results = []
+    test_start = time.time()
+    
     async with aiohttp.ClientSession() as session:
-        for i, query in enumerate(queries, 1):
-            print(f"\n[{i}/{len(queries)}] Testing: {query[:50]}...")
-            result = await make_request(session, query)
+        for i in range(num_requests):
+            # Cycle through queries
+            query = queries[i % len(queries)]
             
-            if result.success:
-                print(f"  ✓ Success: {result.response_time:.2f}s ({result.response_length} chars)")
-            else:
-                print(f"  ✗ Failed: {result.error}")
+            # Schedule next request time
+            target_time = test_start + (i * delay_between_requests)
+            current_time = time.time()
             
+            # Wait if we're ahead of schedule
+            if current_time < target_time:
+                await asyncio.sleep(target_time - current_time)
+            
+            # Make request (don't await, start it and continue)
+            request_start = time.time()
+            
+            # Start request as background task
+            result = await make_request(session, query, request_start)
             results.append(result)
             
-            # Small delay between requests
-            await asyncio.sleep(0.5)
+            # Progress indicator
+            elapsed = time.time() - test_start
+            actual_rpm = (i + 1) / (elapsed / 60) if elapsed > 0 else 0
+            
+            status = "✓" if result.success else "✗"
+            print(f"[{i+1}/{num_requests}] {status} {result.response_time:.2f}s | "
+                  f"Actual RPM: {actual_rpm:.1f} | "
+                  f"Elapsed: {elapsed:.0f}s")
     
-    return results
-
-async def run_concurrent_test(queries: List[str], concurrency: int) -> List[RequestResult]:
-    """Run requests with specified concurrency level."""
-    print(f"\n" + "="*60)
-    print(f"CONCURRENT TEST ({concurrency} requests at a time)")
-    print("="*60)
+    total_duration = time.time() - test_start
+    actual_rpm = num_requests / (total_duration / 60)
     
-    results = []
-    async with aiohttp.ClientSession() as session:
-        # Process in batches
-        for i in range(0, len(queries), concurrency):
-            batch = queries[i:i+concurrency]
-            print(f"\nBatch {i//concurrency + 1}: Testing {len(batch)} requests...")
-            
-            tasks = [make_request(session, query) for query in batch]
-            batch_results = await asyncio.gather(*tasks)
-            
-            for result in batch_results:
-                if result.success:
-                    print(f"  ✓ {result.query[:40]:40s} {result.response_time:.2f}s")
-                else:
-                    print(f"  ✗ {result.query[:40]:40s} Failed")
-            
-            results.extend(batch_results)
-            
-            # Delay between batches
-            if i + concurrency < len(queries):
-                await asyncio.sleep(1)
+    print(f"\n📊 Test Complete:")
+    print(f"  Duration: {total_duration:.1f}s ({total_duration/60:.2f} min)")
+    print(f"  Target RPM: {rpm}")
+    print(f"  Actual RPM: {actual_rpm:.1f}")
+    print(f"  RPM Accuracy: {(actual_rpm/rpm)*100:.1f}%")
     
     return results
 
@@ -145,6 +166,12 @@ def analyze_results(results: List[RequestResult], test_name: str):
     
     if not successful:
         print("❌ No successful requests!")
+        if failed:
+            print(f"\n❌ Errors ({len(failed)} total):")
+            for r in failed[:5]:  # Show first 5
+                print(f"  • {r.query[:40]:40s} {r.error}")
+            if len(failed) > 5:
+                print(f"  ... and {len(failed)-5} more errors")
         return
     
     response_times = [r.response_time for r in successful]
@@ -166,94 +193,137 @@ def analyze_results(results: List[RequestResult], test_name: str):
     p50 = sorted_times[len(sorted_times)//2]
     p90 = sorted_times[int(len(sorted_times)*0.9)]
     p95 = sorted_times[int(len(sorted_times)*0.95)]
+    p99 = sorted_times[int(len(sorted_times)*0.99)] if len(sorted_times) > 10 else sorted_times[-1]
     
     print(f"\n📈 Percentiles:")
-    print(f"  P50: {p50:.2f}s")
-    print(f"  P90: {p90:.2f}s")
-    print(f"  P95: {p95:.2f}s")
-    
-    # Cache effectiveness (detect fast responses)
-    fast_responses = [r for r in successful if r.response_time < 2.0]
-    if fast_responses:
-        print(f"\n⚡ Cache Hits (< 2s):")
-        print(f"  Count: {len(fast_responses)}/{len(successful)} ({len(fast_responses)/len(successful)*100:.1f}%)")
-        for r in fast_responses:
-            print(f"    • {r.query[:50]:50s} {r.response_time:.2f}s")
+    print(f"  P50 (median): {p50:.2f}s")
+    print(f"  P90:          {p90:.2f}s")
+    print(f"  P95:          {p95:.2f}s")
+    print(f"  P99:          {p99:.2f}s")
     
     # Errors
     if failed:
-        print(f"\n❌ Errors:")
-        for r in failed:
-            print(f"  • {r.query[:40]:40s} {r.error}")
+        print(f"\n❌ Errors ({len(failed)} total):")
+        for r in failed[:3]:  # Show first 3
+            print(f"  • {r.query[:40]:40s} {r.error[:50]}")
+        if len(failed) > 3:
+            print(f"  ... and {len(failed)-3} more errors")
     
-    # Rate limit recommendation
+    # Performance assessment
     avg_time = statistics.mean(response_times)
-    max_time = max(response_times)
     
-    print(f"\n🎯 Rate Limit Recommendations:")
-    print(f"  Conservative (based on P95): {60/p95:.1f} req/min ({60/p95/60:.2f} req/sec)")
-    print(f"  Moderate (based on avg):     {60/avg_time:.1f} req/min ({60/avg_time/60:.2f} req/sec)")
-    print(f"  Aggressive (based on min):   {60/min(response_times):.1f} req/min ({60/min(response_times)/60:.2f} req/sec)")
-    
-    print(f"\n💡 Recommendations:")
+    print(f"\n💡 Performance Assessment:")
     if avg_time < 3:
-        print("  ✓ Excellent performance! Can handle high load.")
+        print("  ✓ Excellent! Can handle high load.")
     elif avg_time < 6:
-        print("  ✓ Good performance. Suitable for production.")
+        print("  ✓ Good. Suitable for production.")
     elif avg_time < 10:
-        print("  ⚠️  Moderate performance. Consider optimization.")
+        print("  ⚠️  Moderate. Consider optimization.")
     else:
-        print("  ⚠️  Slow performance. Optimization strongly recommended.")
+        print("  ⚠️  Slow. Optimization strongly recommended.")
     
-    if len(fast_responses) / len(successful) > 0.3:
-        print("  ✓ Cache is working well!")
+    # Can system sustain this rate?
+    if len(failed) == 0:
+        print(f"  ✓ System sustained this load successfully!")
+    elif len(failed) / len(results) < 0.05:
+        print(f"  ⚠️  Minor issues ({len(failed)/len(results)*100:.1f}% failure rate)")
     else:
-        print("  ℹ️  Cache hit rate is low (expected for diverse queries)")
+        print(f"  ❌ Significant failures ({len(failed)/len(results)*100:.1f}% failure rate)")
+    
+    # Rate limit suggestions based on results
+    print(f"\n🎯 Rate Limit Suggestions:")
+    print(f"  Conservative (P95): ~{int(60/p95)} RPM")
+    print(f"  Moderate (avg):     ~{int(60/avg_time)} RPM")
+    print(f"  Aggressive (P50):   ~{int(60/p50)} RPM")
 
 async def main():
     """Run all benchmark tests."""
     print("\n" + "🚀"*30)
-    print("VIJIL DOCS AGENT BENCHMARK")
+    print("VIJIL DOCS AGENT RPM BENCHMARK")
     print("🚀"*30)
     print(f"\nTarget: {BASE_URL}")
     print(f"Model: {MODEL}")
-    print(f"Total queries: {len(TEST_QUERIES)}")
-    print(f"Unique queries: {len(set(TEST_QUERIES))}")
+    print(f"Test queries pool: {len(TEST_QUERIES)} unique queries")
+    print(f"RPM rates to test: {', '.join(map(str, RPM_TESTS))}")
+    print(f"Requests per test: {REQUESTS_PER_TEST}")
     
-    # Test 1: Sequential (baseline)
-    sequential_results = await run_sequential_test(TEST_QUERIES)
-    analyze_results(sequential_results, "Sequential Test")
+    all_results = {}
     
-    # Test 2: Concurrent (2 at a time)
-    concurrent_2_results = await run_concurrent_test(TEST_QUERIES, concurrency=2)
-    analyze_results(concurrent_2_results, "Concurrent Test (2)")
-    
-    # Test 3: Concurrent (3 at a time) - stress test
-    concurrent_3_results = await run_concurrent_test(TEST_QUERIES, concurrency=3)
-    analyze_results(concurrent_3_results, "Concurrent Test (3)")
+    # Run tests for each RPM rate
+    for rpm in RPM_TESTS:
+        print(f"\n{'='*60}")
+        print(f"Starting {rpm} RPM test...")
+        print(f"{'='*60}")
+        
+        results = await run_rpm_test(rpm, REQUESTS_PER_TEST, TEST_QUERIES)
+        all_results[rpm] = results
+        
+        # Analyze immediately after each test
+        analyze_results(results, f"{rpm} RPM Test")
+        
+        # Brief cooldown between tests
+        if rpm != RPM_TESTS[-1]:  # Don't wait after last test
+            print(f"\n⏸️  Cooldown: 10 seconds before next test...")
+            await asyncio.sleep(10)
     
     # Summary comparison
     print("\n" + "="*60)
     print("SUMMARY COMPARISON")
     print("="*60)
     
-    def avg_time(results):
+    def get_stats(results):
         successful = [r for r in results if r.success]
-        return statistics.mean([r.response_time for r in successful]) if successful else 0
+        if not successful:
+            return None
+        times = [r.response_time for r in successful]
+        return {
+            'avg': statistics.mean(times),
+            'p50': statistics.median(times),
+            'p95': sorted(times)[int(len(times)*0.95)],
+            'success_rate': len(successful) / len(results) * 100
+        }
     
-    print(f"\nAverage Response Times:")
-    print(f"  Sequential:      {avg_time(sequential_results):.2f}s")
-    print(f"  Concurrent (2):  {avg_time(concurrent_2_results):.2f}s")
-    print(f"  Concurrent (3):  {avg_time(concurrent_3_results):.2f}s")
+    print("\n" + "-"*60)
+    print(f"{'RPM':<10} {'Avg Time':<12} {'P50':<10} {'P95':<10} {'Success Rate':<15}")
+    print("-"*60)
+    
+    for rpm in RPM_TESTS:
+        stats = get_stats(all_results[rpm])
+        if stats:
+            print(f"{rpm:<10} {stats['avg']:<12.2f}s {stats['p50']:<10.2f}s "
+                  f"{stats['p95']:<10.2f}s {stats['success_rate']:<15.1f}%")
+        else:
+            print(f"{rpm:<10} {'FAILED':<12} {'N/A':<10} {'N/A':<10} {'0.0%':<15}")
+    
+    print("-"*60)
+    
+    # Recommendations
+    print("\n" + "="*60)
+    print("RECOMMENDATIONS")
+    print("="*60)
+    
+    sustainable_rpms = []
+    for rpm in RPM_TESTS:
+        stats = get_stats(all_results[rpm])
+        if stats and stats['success_rate'] >= 95 and stats['p95'] < 10:
+            sustainable_rpms.append(rpm)
+    
+    if sustainable_rpms:
+        max_sustainable = max(sustainable_rpms)
+        print(f"\n✅ Highest sustainable rate: {max_sustainable} RPM")
+        print(f"   (≥95% success rate, P95 < 10s)")
+    else:
+        print(f"\n⚠️  No rate achieved 95% success with P95 < 10s")
+        print(f"   Consider:")
+        print(f"   - Scaling infrastructure")
+        print(f"   - Optimizing agent/tools")
+        print(f"   - Reducing max_tokens")
     
     print("\n" + "="*60)
     print("BENCHMARK COMPLETE")
     print("="*60)
-    print("\nNext steps:")
-    print("1. Review cache effectiveness (look for fast repeat queries)")
-    print("2. Check if concurrent requests slow down significantly")
-    print("3. Set rate limits based on P95 recommendations")
-    print("4. Monitor your LLM provider's rate limits")
+    print(f"\nTotal requests sent: {sum(len(r) for r in all_results.values())}")
+    print(f"Total test duration: Check logs above for per-test durations")
     print()
 
 if __name__ == "__main__":

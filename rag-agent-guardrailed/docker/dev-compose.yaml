@@ -7,8 +7,8 @@ services:
       dockerfile: docker/Dockerfile
     container_name: vijil-docs-agent-guardrailed
     environment:
-      - REDPILL_API_KEY=${REDPILL_API_KEY}
-      - REDPILL_BASE_URL=${REDPILL_BASE_URL}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_BASE_URL=${GROQ_BASE_URL}
       - CHAT_MODEL=${CHAT_MODEL}
       - RAG_TEMP=${RAG_TEMP:-0.2}
       - RAG_DATA_DIR=${RAG_DATA_DIR:-data/docs}
