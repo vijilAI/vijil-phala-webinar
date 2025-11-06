@@ -17,7 +17,7 @@ The complete workflow shows how to move from an unguarded agent to a production-
 | **Base Agent** | `rag-agent/` | For evaluation (no guardrails) |
 | **Base Agent (Docker)** | `public.ecr.aws/h6q2v0i0/vijil-docs-agent:0.0.18` | Pre-built image for deployment |
 | **Production Agent** | `rag-agent-guardrailed/` | With recommended guardrails (uses CPU-only PyTorch) |
-| **Production Agent (Docker)** | `public.ecr.aws/h6q2v0i0/vijil-docs-agent-guardrailed:0.0.10` | Pre-built image for deployment |
+| **Production Agent (Docker)** | `public.ecr.aws/h6q2v0i0/vijil-docs-agent-guardrailed:0.0.11` | Pre-built image for deployment |
 | **Evaluation** | `evaluate-connection.ipynb` | Run tests, get recommendations |
 
 > 🔑 **Key Setup:** OpenAI API key is **required** (for embeddings), Groq API key is **recommended** (for chat).  
@@ -244,7 +244,7 @@ Both agents are available as **pre-built Docker images** hosted on AWS ECR (publ
 | Agent | Docker Image | Description |
 |-------|-------------|-------------|
 | **Base Agent** | `public.ecr.aws/h6q2v0i0/vijil-docs-agent:0.0.18` | For evaluation (no guardrails) |
-| **Guardrailed Agent** | `public.ecr.aws/h6q2v0i0/vijil-docs-agent-guardrailed:0.0.10` | Production with recommended guardrails |
+| **Guardrailed Agent** | `public.ecr.aws/h6q2v0i0/vijil-docs-agent-guardrailed:0.0.11` | Production with recommended guardrails |
 
 > 🌐 **Public Images:** No authentication required - pull and deploy directly!
 
