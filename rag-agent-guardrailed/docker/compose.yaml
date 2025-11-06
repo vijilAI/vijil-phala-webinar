@@ -2,7 +2,7 @@ name: vijil-docs-agent-guardrailed
 
 services:
   agent:
-    image: public.ecr.aws/h6q2v0i0/vijil-docs-agent-guardrailed:latest
+    image: public.ecr.aws/h6q2v0i0/vijil-docs-agent-guardrailed:0.0.10
     container_name: vijil-docs-agent-guardrailed
     environment:
       - GROQ_API_KEY=${GROQ_API_KEY}
