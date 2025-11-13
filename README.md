@@ -5,8 +5,9 @@ This repository is for the **Vijil × Phala webinar**, demonstrating how to:
 2. **Test** it using Vijil Evaluate to find vulnerabilities
 3. **Fix** it by applying recommended Vijil Dome guardrails
 4. **Redeploy** the secured agent back to Phala
+5. **Test** deployed agents using the included chat UI
 
-The complete workflow shows how to move from an unguarded agent to a production-ready, secured agent using data-driven guardrails.
+The complete workflow shows how to move from an unguarded agent to a production-ready, secured agent using data-driven guardrails. A simple Streamlit chat interface (`chat-ui/`) is included to interactively test your deployed agents.
 
 ## 🎯 Quick Reference
 
@@ -15,10 +16,11 @@ The complete workflow shows how to move from an unguarded agent to a production-
 | **Chat LLM** | `qwen/qwen3-32b` on Groq | Agent reasoning and responses |
 | **Embeddings** | OpenAI `text-embedding-3-small` | RAG document retrieval |
 | **Base Agent** | `rag-agent/` | For evaluation (no guardrails) |
-| **Base Agent (Docker)** | `public.ecr.aws/h6q2v0i0/vijil-docs-agent:0.0.18` | Pre-built image for deployment |
+| **Base Agent (Docker)** | `public.ecr.aws/h6q2v0i0/vijil-docs-agent:0.0.19` | Pre-built image for deployment |
 | **Production Agent** | `rag-agent-guardrailed/` | With recommended guardrails (uses CPU-only PyTorch) |
 | **Production Agent (Docker)** | `public.ecr.aws/h6q2v0i0/vijil-docs-agent-guardrailed:0.0.11` | Pre-built image for deployment |
 | **Evaluation** | `evaluate-connection.ipynb` | Run tests, get recommendations |
+| **Chat UI** | `chat-ui/` | Streamlit interface for testing deployed agents |
 
 > 🔑 **Key Setup:** OpenAI API key is **required** (for embeddings), Groq API key is **recommended** (for chat).  
 > 🐳 **Deploy on Phala:** Just upload `compose.yaml` + `.env` - that's it!
@@ -32,8 +34,9 @@ The complete workflow shows how to move from an unguarded agent to a production-
 3. **Get** recommended guardrail configuration from evaluation results
 4. **Fix** by applying recommended guardrails (`rag-agent-guardrailed/`)
 5. **Redeploy** secured agent to Phala - now production-ready with data-driven protection
+6. **Test** deployed agents using the chat UI (`chat-ui/`) - interactively test both agents
 
-The `rag-agent-guardrailed` uses the **exact guardrail configuration recommended by Vijil Evaluate** after analyzing the base agent's security, safety, and privacy risks discovered during testing.
+The `rag-agent-guardrailed` uses the **exact guardrail configuration recommended by Vijil Evaluate** after analyzing the base agent's security, safety, and privacy risks discovered during testing. Use the included Streamlit chat interface to test your deployed agents and compare behavior between the base and guardrailed agents.
 
 ## 📁 Repository Structure
 
@@ -47,6 +50,10 @@ vijil-phala-webinar/
 │       └── compose.yaml          # Phala deployment config
 │
 ├── evaluate-connection.ipynb     # 2️⃣ Test agent & get guardrail recommendations
+│
+├── chat-ui/                      # 🖥️ Simple Streamlit UI for testing deployed agents
+│   ├── app.py                    # Chat interface
+│   └── requirements.txt          # Python dependencies
 │
 └── rag-agent-guardrailed/        # 3️⃣ Secured agent (redeploy to Phala for production)
     ├── agent.py                  # Guarded agent (applies recommended config)
@@ -243,7 +250,7 @@ Both agents are available as **pre-built Docker images** hosted on AWS ECR (publ
 
 | Agent | Docker Image | Description |
 |-------|-------------|-------------|
-| **Base Agent** | `public.ecr.aws/h6q2v0i0/vijil-docs-agent:0.0.18` | For evaluation (no guardrails) |
+| **Base Agent** | `public.ecr.aws/h6q2v0i0/vijil-docs-agent:0.0.19` | For evaluation (no guardrails) |
 | **Guardrailed Agent** | `public.ecr.aws/h6q2v0i0/vijil-docs-agent-guardrailed:0.0.11` | Production with recommended guardrails |
 
 > 🌐 **Public Images:** No authentication required - pull and deploy directly!
@@ -314,6 +321,37 @@ Health check endpoint:
 ```bash
 curl https://your-phala-url.phala.network/v1/health
 ```
+
+#### Step 4: Test with Chat UI
+
+A simple Streamlit chat interface is included to interactively test your deployed Phala agent.
+
+**Setup:**
+```bash
+cd chat-ui
+pip install -r requirements.txt
+```
+
+**Run the chat UI:**
+```bash
+# Option 1: Set environment variables
+export CHAT_API_BASE="https://your-phala-url.phala.network/v1"
+export CHAT_MODEL="vijil-docs-agent"
+export CHAT_API_KEY=""  # Optional, if your endpoint requires auth
+
+streamlit run app.py
+
+# Option 2: Configure via sidebar (defaults will be used)
+streamlit run app.py
+```
+
+The chat UI will open in your browser (typically `http://localhost:8501`). You can:
+- Configure the API endpoint URL in the sidebar
+- Set the model name (use `vijil-docs-agent`)
+- Chat interactively with your deployed agent
+- View trust/audit information if provided by the guardrailed agent
+
+> 💡 **Tip:** Use the sidebar to quickly switch between different deployed endpoints (base vs guardrailed agent) for comparison.
 
 ### Local Docker Deployment
 
